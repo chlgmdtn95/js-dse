@@ -3,6 +3,7 @@ import {
   FunctionDeclaration,
   Program,
   Statement,
+  VariableDeclaration,
 } from 'acorn';
 
 import { generate } from 'astring';
@@ -139,17 +140,40 @@ export class Instrumenter {
       case 'VariableDeclaration': {
         // This subset has neither destructuring nor a declaration without an
         // initializer; report them with `unsupported`.
-        todo('VariableDeclaration');
+        for (const p of stmt.declarations)
+        {
+          if (p.id.type !== 'Identifier')
+            unsupported(p.id, 'destructuring');
+          if (!p.init)
+            unsupported(p, 'declaration without an initializer');
+          p.init = this.expr(p.init);
+        }
+        return stmt;
+        // todo('VariableDeclaration');
       }
 
       case 'IfStatement': {
         // The test is a condition, and the alternate is optional.
-        todo('IfStatement');
+        stmt.test = this.cond(stmt.test);
+        stmt.consequent = this.stmt(stmt.consequent);
+        if(stmt.alternate)
+          stmt.alternate = this.stmt(stmt.alternate);
+        // stmt.test = this.stmt(stmt.test);
+        // if (stmt.consequent)
+        //   stmt.consequent = this.expr(stmt.consequent);
+        // if(stmt.alternate)
+        //   stmt.alternate = this.expr(stmt.alternate);
+        return stmt;
+        // todo('IfStatement');
       }
 
       case 'WhileStatement':
       case 'DoWhileStatement': {
-        todo('WhileStatement');
+        stmt.test = this.cond(stmt.test);
+        stmt.body = this.stmt(stmt.body);
+
+        return stmt;
+      // todo('WhileStatement');
       }
 
       case 'ForStatement': {
@@ -157,12 +181,33 @@ export class Instrumenter {
         // declaration or an expression.  A `for` without a test loops forever,
         // so give it the test `true`: the runtime then gets a chance to count
         // the iteration.
-        todo('ForStatement');
+        if(stmt.init){
+          // stmt.init = this.stmt(stmt.init);
+          if(stmt.init.type == 'VariableDeclaration')
+            this.stmt(stmt.init);
+          else
+            stmt.init = this.expr(stmt.init);
+        }
+
+        if(stmt.test)
+          stmt.test = this.cond(stmt.test);
+        else
+          stmt.test = this.cond(createLit(true));
+
+        if(stmt.update)
+          stmt.update = this.expr(stmt.update);
+        stmt.body = this.stmt(stmt.body);
+
+        return stmt;
+        // todo('ForStatement');
       }
 
       case 'ReturnStatement': {
         // The argument is optional.
-        todo('ReturnStatement');
+      if (stmt.argument)
+        stmt.argument = this.expr(stmt.argument);
+      return stmt;
+        // todo('ReturnStatement');
       }
 
       default: return unsupported(stmt);
@@ -193,7 +238,11 @@ export class Instrumenter {
         // `l + r` becomes `__dse__.bin('+', l, r)`.  Note that the left
         // operand of `in` may be a `PrivateIdentifier`, which is not an
         // expression.
-        todo('BinaryExpression');
+        if (expr.left.type == 'PrivateIdentifier')
+          unsupported(expr.left);
+        return(createCall('bin', [createLit(expr.operator), this.expr(expr.left), this.expr(expr.right)]));
+
+        // todo('BinaryExpression');
       }
 
       case 'LogicalExpression': {
@@ -201,7 +250,16 @@ export class Instrumenter {
         // evaluated yet: pass it as `() => right` (`createArrow`) to
         // `__dse__.and` or `__dse__.or`.  The left operand is a branch of its
         // own, so it needs a `site`, and the runtime calls `br` on it.
-        todo('LogicalExpression');
+        
+        // return createCall('and', [createLit(expr.operator), this.expr(expr.left), this.expr(expr.right)]);
+        const op = expr.operator == '&&' ? 'and' : 'or';
+        return createCall(op, [
+          // op.indexOf(),
+          createLit(this.site(expr.left)),
+          this.expr(expr.left),
+          createArrow(this.expr(expr.right))
+        ]);
+        // todo('LogicalExpression');
       }
 
       case 'ConditionalExpression': {
