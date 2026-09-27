@@ -264,20 +264,68 @@ export class Instrumenter {
 
       case 'ConditionalExpression': {
         // The test is a condition.
-        todo('ConditionalExpression');
+        // expr.test = this.expr(expr.test);
+        expr.test = this.cond(expr.test);
+        expr.consequent = this.expr(expr.consequent);
+        expr.alternate = this.expr(expr.alternate);
+
+        return expr;
+        // todo('ConditionalExpression');
       }
 
       case 'AssignmentExpression': {
         // `x = e` only needs its right-hand side instrumented, and a compound
         // assignment `x += e` becomes `x = __dse__.bin('+', x, e)`.
-        todo('AssignmentExpression');
+        if(expr.operator == '=')
+        {
+          expr.right = this.expr(expr.right);
+          return expr;
+        }
+        else
+        {
+          // deal with TS type error
+          if (expr.left.type !== 'Identifier')unsupported(expr.left);
+          return createAssign(expr.left, createCall('bin', [
+            createLit(expr.operator.charAt(0)),
+            this.expr(expr.left),
+            this.expr(expr.right)
+          ]));
+        }
+        return expr;
+        // todo('AssignmentExpression');
       }
 
       case 'UpdateExpression': {
         // `++x` is an assignment of `__dse__.bin('+', x, __dse__.lit(1))`.
         // `x++` evaluates to the *old* value, so the assignment is delayed and
         // handed to `__dse__.post` as `() => x = ...`.
-        todo('UpdateExpression');
+
+        if (expr.argument.type !=='Identifier')unsupported(expr.argument);
+        const op = expr.operator == '++'? '+' : '-';
+        const up = createAssign(expr.argument, createCall('bin', [
+          createLit(op),
+          this.expr(expr.argument),
+          createCall('lit', [createLit(1)])
+        ]))
+
+        if (expr.prefix)
+          return up;
+        else
+          return createCall('post', [this.expr(expr.argument), createArrow(up)]);
+        // if(expr.prefix)
+        // {
+        //   createAssign(expr.argument, 
+        //     createCall('bin', [
+        //       createLit(op),
+        //       expr.argument,
+        //       createLit('1')
+        //     ])
+        //  )
+        // }
+        // else
+        // {}
+
+        // todo('UpdateExpression');
       }
 
       case 'CallExpression': {
@@ -288,6 +336,9 @@ export class Instrumenter {
       }
 
       case 'SequenceExpression': {
+        for (let i =0; i < expr.expressions.length; i++)
+          expr.expressions[i] = this.expr(expr.expressions[i]);
+        return expr;
         todo('SequenceExpression');
       }
 
