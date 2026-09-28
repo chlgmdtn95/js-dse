@@ -283,8 +283,9 @@ export class Instrumenter {
         }
         else
         {
-          // deal with TS type error
-          if (expr.left.type !== 'Identifier')unsupported(expr.left);
+          //TS type error
+          if (expr.left.type !== 'Identifier')
+            unsupported(expr.left);
           return createAssign(expr.left, createCall('bin', [
             createLit(expr.operator.charAt(0)),
             this.expr(expr.left),
@@ -332,14 +333,38 @@ export class Instrumenter {
         // `hash(e)` becomes `__dse__.hash(e)`, since the solver has no theory
         // for it.  Any other call is a call to a function of the program: its
         // arguments are instrumented, and the real call stack does the rest.
-        todo('CallExpression');
+        const args: Expression[] = []; 
+        for(let i=0; i <expr.arguments.length; i++)
+        {
+          const a = expr.arguments[i]
+          if (a.type == 'SpreadElement')
+            unsupported(a);
+          else
+            args.push(this.expr(a));
+            // expr.arguments[i]=this.expr(a);
+        }
+        expr.arguments = args;
+        if (expr.callee.type == 'Identifier' && expr.callee.name == 'hash')
+          return createCall('hash', args);
+          
+        // expr.callee = this.expr(createLit('hash'))
+        // for (let i=0; i <expr.arguments.length; i++)
+        // {
+        //   if (expr.arguments[i].type !== 'Identifier')
+        //     unsupported(expr.arguments[i]);
+        //   else
+        //     expr.arguments[i] = this.expr(expr.arguments[i]);
+        // }
+        
+        return expr;
+        // todo('CallExpression');
       }
 
       case 'SequenceExpression': {
         for (let i =0; i < expr.expressions.length; i++)
           expr.expressions[i] = this.expr(expr.expressions[i]);
         return expr;
-        todo('SequenceExpression');
+        // todo('SequenceExpression');
       }
 
       default: return unsupported(expr);
@@ -432,7 +457,7 @@ export class Runtime {
       default: return err(`Unsupported operator: \`${op}\`.`);
     }
   }
-
+  
   // A binary operation.
   //
   // `+`, `-`, `*`, `<`, `<=`, `>`, `>=`, `===` and `!==` are computed with the
@@ -443,17 +468,44 @@ export class Runtime {
   // negative operands, so the result keeps its concrete value but loses its
   // symbolic expression (`concretize`), and no branch on it can be flipped.
   //
-  // `==`, `!=` and `/` are outside the subset, and `===` between a number and
+  // `==`, `!=` and `/` are outside the subset, 
+  // and `===` between a number and
   // a boolean is an error.
   bin = (op: string, left: Value, right: Value): Value => {
-    todo('Runtime.bin');
-  }
+    switch (op)
+    {
+      case '+': return { conc: asNum(left) + asNum(right), sym: binarySym('+', left.sym, right.sym )};
+      case '-': return { conc: asNum(left) - asNum(right), sym: binarySym('-', left.sym, right.sym )};
+      case '*': return { conc: asNum(left) * asNum(right), sym: binarySym('*', left.sym, right.sym )};
+      case '<': return { conc: asNum(left) < asNum(right), sym: binarySym('<', left.sym, right.sym )};
+      case '<=': return { conc: asNum(left) <= asNum(right), sym: binarySym('<=', left.sym, right.sym )};
+      case '>': return { conc: asNum(left) > asNum(right), sym: binarySym('>', left.sym, right.sym )};
+      case '>=': return { conc: asNum(left) >= asNum(right), sym: binarySym('>=', left.sym, right.sym )};
+      case '===': { 
+        // conc: asNum(left) === asNum(right), sym: binarySym('===', left.sym, right.sym )
+        if ( typeof left.conc !== typeof right.conc)
+          err(`Mixed type ${op}`);
+        return { conc: left.conc === right.conc, sym: binarySym('===', left.sym, right.sym)};
+      }
+      case '!==': { 
+        // conc: asNum(left) !== asNum(right), sym: binarySym('!==', left.sym, right.sym )
+        if ( typeof left.conc !== typeof right.conc)
+          err(`Mixed type ${op}`);
+        return { conc: left.conc !== right.conc, sym: binarySym('!==', left.sym, right.sym)};
+      }
+      
+      case '%': return concrete(asNum(left) % asNum(right));
 
+      default: return err(`Unsupported operator: \`${op}\`.`);
+    }
+  }
+  
   // The builtin `hash`, which the solver cannot reason about.  Its result has
   // to be concretized -- this is the step that lets DSE go where symbolic
   // execution is stuck.
   hash = (value: Value): Value => {
-    todo('Runtime.hash');
+    return concrete(hash(asNum(value)));
+    // todo('Runtime.hash');
   }
 
   // Take a branch on a condition, record it as a decision, and give back a
@@ -468,15 +520,35 @@ export class Runtime {
   //     itself when `a` is false, and the enclosing `if` would record it twice.
   br = (id: number, cond: Value): boolean => {
     // 1. Count the step, and throw `StepsExceeded` beyond `MAX_STEPS`.
+    this.steps++;
+    if (this.steps >= MAX_STEPS)
+      throw new StepsExceeded();
+    
     // 2. Record a decision -- the range `this.ranges[id]`, the symbolic
     //    condition, and the direction this execution takes -- unless one of
     //    the two rules above applies.  `symToString` gives the formula of a
     //    condition, and `hasVar` tells whether it depends on an input.
-    // 3. Throw `DepthExceeded` when the path already has `MAX_DEPTH`
-    //    decisions.
+    
+    const taken = asBool(cond);
+    
+    if (hasVar(cond.sym))
+    {
+      const sig = symToString(cond.sym);
+      const already = this.path.some(d => symToString(d.sym) === sig);
+
+      if (!already)
+      {
+        if (this.path.length >= MAX_DEPTH)
+          throw new DepthExceeded();
+        this.path.push({range: this.ranges[id], sym: cond.sym, taken});
+        // 3. Throw `DepthExceeded` when the path already has `MAX_DEPTH`
+        //    decisions.
+      }
+    }
     // 4. Give back the concrete boolean, so that the instrumented code can
     //    branch on it.
-    todo('Runtime.br');
+    return taken;
+    // todo('Runtime.br');
   }
 }
 
@@ -498,11 +570,33 @@ export function toZ3(
     case 'Bool': return ctx.Bool.val(sym.value);
     case 'Unary': {
       // `neg` negates an integer and `not` negates a boolean.
-      todo('Unary');
+      const s = toZ3(ctx, consts, sym.sym);
+
+      if (sym.op == '-')
+        return s.neg();
+      if (sym.op == '!')
+        return s.not();
+      // todo('Unary');
+      return err(`Unknown symbolic input: \`${sym.op}\`.`);
     }
     case 'Binary': {
       // `add`, `sub`, `mul`, `lt`, `le`, `gt`, `ge`, `eq` and `neq`.
-      todo('Binary');
+      const left = toZ3(ctx, consts, sym.left);
+      const right = toZ3(ctx, consts, sym.right);
+      switch (sym.op)
+      {
+        case '+': return left.add(right);
+        case '-': return left.sub(right);
+        case '*': return left.mul(right);
+        case '<': return left.lt(right);
+        case '<=': return left.le(right);
+        case '>': return left.gt(right);
+        case '>=': return left.ge(right);
+        case '===': return left.eq(right);
+        case '!==': return left.neq(right);
+      }
+      // return err(`Unknown symbolic input: \`${sym.op}\`.`);
+      // todo('Binary');
     }
   }
 }
@@ -579,7 +673,50 @@ export class DSE {
   // Note that one `Runtime` instruments the code once, and can be run many
   // times.
   async explore(): Promise<void> {
-    todo('DSE.explore');
+
+    const runtime = new Runtime(this.code);
+    const worklist: Conc[][] = [this.initial];
+    const triedSigs = new Set<string>();
+    
+    //repeat until worklist is empty
+    while (worklist.length > 0)
+    {
+      const currentInput = worklist.shift()!;
+      const result = runtime.run(currentInput);
+      const sig = pathToString(result.path);
+
+      //check if visited
+      if (this.paths.some(p=> pathToString(p.path) === sig))
+        continue;
+
+      //if not visited, push pathInfo to the paths list
+      this.paths.push({
+        path: result.path,
+        input: currentInput,
+        ret: result.ret,
+        bounded: result.bounded,
+      })
+
+      //iterate from backward
+      for (let i=result.path.length -1; i>=0; i--)
+      {
+        const flipped = flip(result.path, i);
+        const flippedSig = pathToString(flipped);
+
+        if(triedSigs.has(flippedSig)) 
+          continue;
+        triedSigs.add(flippedSig);
+
+        const pc = pathCond(flipped);
+        const sr = await solve(pc, this.params, currentInput, toZ3);
+
+        if(sr.status === 'sat')
+          worklist.push(sr.model);
+        else if (sr.status === 'unsat')
+          this.infeasible.push(flippedSig);
+      }
+    }
+    // todo('DSE.explore');
   }
 
   // The call that produced a path, e.g. `sort(3, 7)`
